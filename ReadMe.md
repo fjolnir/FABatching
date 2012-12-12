@@ -1,5 +1,7 @@
 # FABatching
 
+A single header library for adding allocation batching&pooling to Objective-C classes.
+
 ## Usage
 
 ### Header
