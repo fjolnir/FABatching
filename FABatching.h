@@ -3,11 +3,11 @@
 #import <objc/message.h>
 #import <libkern/OSAtomic.h>
 
-// the size needed for the batch, with proper alignment for objects
-#define ALIGNMENT           8
-#define OBJECTS_PER_BUNCH   64
-#define BatchSize           ((sizeof(FABatch) + (ALIGNMENT - 1)) & ~(ALIGNMENT - 1))
-#define PoolSize            128
+// the size needed for the batch, with proper FABatchAlignment for objects
+#define FABatchAlignment    8
+#define FAObjectsPerBatch   64
+#define FABatchSize         ((sizeof(FABatch) + (FABatchAlignment - 1)) & ~(FABatchAlignment - 1))
+#define FAPoolSize          128
 
 typedef struct
 {
@@ -34,10 +34,10 @@ static inline FABatch *FANewObjectBatch(FABatchPool *pool, long batchInstanceSiz
 
     // Empty/Full pool => allocate new batch
     if(pool->low == pool->high || ((pool->high + 1) % pool->poolSize) == pool->low) {
-        batchInstanceSize = (batchInstanceSize + (ALIGNMENT - 1)) & ~(ALIGNMENT - 1);
+        batchInstanceSize = (batchInstanceSize + (FABatchAlignment - 1)) & ~(FABatchAlignment - 1);
         size = batchInstanceSize + sizeof(int);
 
-        len = size * OBJECTS_PER_BUNCH + BatchSize;
+        len = size * FAObjectsPerBatch + FABatchSize;
         if(!(batch = (FABatch *)calloc(1, len))){
             NSLog(@"Failed to allocate object. Out of memory?");
             return nil;
@@ -73,7 +73,7 @@ static inline BOOL FASizeFitsObjectBatch(FABatch *p, long size)
 
 static inline BOOL FABatchIsExhausted(FABatch *p)
 {
-    return p->_allocated == OBJECTS_PER_BUNCH;
+    return p->_allocated == FAObjectsPerBatch;
 }
 
 #define FA_BATCH_IVARS                                                                         \
@@ -90,7 +90,7 @@ static inline Klass *FABatchAlloc##Klass(Class self)                            
     size_t instanceSize = class_getInstanceSize(self);                                         \
     OSSpinLockLock(&_BatchPool.spinLock);                                                      \
     if(__builtin_expect(!_BatchPool.batches, 0)) {                                             \
-        _BatchPool.poolSize = PoolSize;                                                        \
+        _BatchPool.poolSize = FAPoolSize;                                                      \
         _BatchPool.batches  = (FABatch **)malloc(sizeof(void*) * _BatchPool.poolSize);         \
         _BatchPool.currentBatch = FANewObjectBatch(&_BatchPool, instanceSize);                 \
     }                                                                                          \
@@ -102,7 +102,7 @@ static inline Klass *FABatchAlloc##Klass(Class self)                            
         /* Grab an object from the current batch */                                            \
         /* and place isa pointer there */                                                      \
         NSUInteger offset;                                                                     \
-        offset      = BatchSize + batch->_instance_size * batch->_allocated;                   \
+        offset      = FABatchSize + batch->_instance_size * batch->_allocated;                 \
         obj         = (id)((char *)batch + offset);                                            \
         obj->_batch = batch;                                                                   \
         obj->_retainCountMinusOne = 0;                                                         \
@@ -110,7 +110,7 @@ static inline Klass *FABatchAlloc##Klass(Class self)                            
         batch->_allocated++;                                                                   \
         *(Class *)obj = self;                                                                  \
     } else {                                                                                   \
-        NSCAssert(NO, @"Unable to get %@ from batch", self);                                    \
+        NSCAssert(NO, @"Unable to get %@ from batch", self);                                   \
     }                                                                                          \
                                                                                                \
     /* Batch full? => Make a new one for next time */                                          \
@@ -137,7 +137,7 @@ static inline Klass *FABatchAlloc##Klass(Class self)                            
 
 #define FA_BATCH_DEALLOC                                                                       \
     /* Recycle the entire batch if all the objects in it are unreferenced */                   \
-    if(__sync_add_and_fetch(&_batch->_freed, 1) == OBJECTS_PER_BUNCH) {                        \
+    if(__sync_add_and_fetch(&_batch->_freed, 1) == FAObjectsPerBatch) {                        \
         OSSpinLockLock(&_BatchPool.spinLock);                                                  \
         FARecycleObjectBatch(&_BatchPool, _batch);                                             \
         OSSpinLockUnlock(&_BatchPool.spinLock);                                                \
