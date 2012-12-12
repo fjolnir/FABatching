@@ -142,4 +142,6 @@ static inline Klass *FABatchAlloc##Klass(Class self)                            
         FARecycleObjectBatch(&_BatchPool, _batch);                                             \
         OSSpinLockUnlock(&_BatchPool.spinLock);                                                \
     }                                                                                          \
-    else if(NO) [super dealloc]; /* Silence compiler warning about not calling super dealloc */
+    return;                                                                                    \
+    __builtin_unreachable();                                                                   \
+    [super dealloc]; /* Silence compiler warning about not calling super dealloc */
