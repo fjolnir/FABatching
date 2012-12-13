@@ -3,24 +3,24 @@
 #import <objc/message.h>
 #import <libkern/OSAtomic.h>
 
-// the size needed for the batch, with proper FABatchAlignment for objects
-#define FABatchAlignment    8
-#define FAObjectsPerBatch   64
-#define FABatchSize         ((sizeof(FABatch) + (FABatchAlignment - 1)) & ~(FABatchAlignment - 1))
-#define FAPoolSize          128
+// the size needed for the batch, with proper alignment for objects
+#define FABatchAlignment   8
+#define FAObjectsPerBatch  64
+#define FABatchSize        ((sizeof(FABatch) + (FABatchAlignment - 1)) & ~(FABatchAlignment - 1))
+#define FABatchPoolSize    128
 
 typedef struct
 {
-    long    _instance_size;
-    int32_t _freed;
-    int32_t _allocated;
+    long    instanceSize;
+    int32_t freed;
+    int32_t allocated;
     int32_t _reserved;
 } FABatch;
 
 typedef struct
 {
-    NSUInteger poolSize;
-    uintptr_t low, high;
+    long poolSize;
+    long low, high;
     FABatch   *currentBatch;
     FABatch   **batches;
     OSSpinLock spinLock;
@@ -28,9 +28,9 @@ typedef struct
 
 static inline FABatch *FANewObjectBatch(FABatchPool *pool, long batchInstanceSize)
 {
-    NSUInteger     len;
-    unsigned long  size;
-    FABatch        *batch;
+    unsigned long len;
+    unsigned long size;
+    FABatch       *batch;
 
     // Empty/Full pool => allocate new batch
     if(pool->low == pool->high || ((pool->high + 1) % pool->poolSize) == pool->low) {
@@ -42,7 +42,7 @@ static inline FABatch *FANewObjectBatch(FABatchPool *pool, long batchInstanceSiz
             NSLog(@"Failed to allocate object. Out of memory?");
             return nil;
         }
-        batch->_instance_size = batchInstanceSize;
+        batch->instanceSize = batchInstanceSize;
     } else {
         // Otherwise we recycle an existing batch
         batch = pool->batches[pool->low];
@@ -57,8 +57,8 @@ static inline void FARecycleObjectBatch(FABatchPool *pool, FABatch *batch)
     if(next == pool->low) // Full?
         free(batch);
     else {
-        batch->_freed = 0;
-        batch->_allocated = 0;
+        batch->freed = 0;
+        batch->allocated = 0;
         pool->batches[pool->high] = batch;
         pool->high = next;
         __sync_val_compare_and_swap(&pool->currentBatch, batch, pool->batches[next]);
@@ -68,12 +68,12 @@ static inline void FARecycleObjectBatch(FABatchPool *pool, FABatch *batch)
 static inline BOOL FASizeFitsObjectBatch(FABatch *p, long size)
 {
     // We can't deal with subclasses larger than what we first allocated
-    return p && size <= p->_instance_size;
+    return p && size <= p->instanceSize;
 }
 
 static inline BOOL FABatchIsExhausted(FABatch *p)
 {
-    return p->_allocated == FAObjectsPerBatch;
+    return p->allocated == FAObjectsPerBatch;
 }
 
 #define FA_BATCH_IVARS                                                                         \
@@ -90,7 +90,7 @@ static inline Klass *FABatchAlloc##Klass(Class self)                            
     size_t instanceSize = class_getInstanceSize(self);                                         \
     OSSpinLockLock(&_BatchPool.spinLock);                                                      \
     if(__builtin_expect(!_BatchPool.batches, 0)) {                                             \
-        _BatchPool.poolSize = FAPoolSize;                                                      \
+        _BatchPool.poolSize = FABatchPoolSize;                                                 \
         _BatchPool.batches  = (FABatch **)malloc(sizeof(void*) * _BatchPool.poolSize);         \
         _BatchPool.currentBatch = FANewObjectBatch(&_BatchPool, instanceSize);                 \
     }                                                                                          \
@@ -101,13 +101,13 @@ static inline Klass *FABatchAlloc##Klass(Class self)                            
     {                                                                                          \
         /* Grab an object from the current batch */                                            \
         /* and place isa pointer there */                                                      \
-        NSUInteger offset;                                                                     \
-        offset      = FABatchSize + batch->_instance_size * batch->_allocated;                 \
+        unsigned long offset;                                                                  \
+        offset      = FABatchSize + batch->instanceSize * batch->allocated;                    \
         obj         = (id)((char *)batch + offset);                                            \
         obj->_batch = batch;                                                                   \
         obj->_retainCountMinusOne = 0;                                                         \
                                                                                                \
-        batch->_allocated++;                                                                   \
+        batch->allocated++;                                                                    \
         *(Class *)obj = self;                                                                  \
     } else {                                                                                   \
         NSCAssert(NO, @"Unable to get %@ from batch", self);                                   \
@@ -137,7 +137,7 @@ static inline Klass *FABatchAlloc##Klass(Class self)                            
 
 #define FA_BATCH_DEALLOC                                                                       \
     /* Recycle the entire batch if all the objects in it are unreferenced */                   \
-    if(__sync_add_and_fetch(&_batch->_freed, 1) == FAObjectsPerBatch) {                        \
+    if(__sync_add_and_fetch(&_batch->freed, 1) == FAObjectsPerBatch) {                         \
         OSSpinLockLock(&_BatchPool.spinLock);                                                  \
         FARecycleObjectBatch(&_BatchPool, _batch);                                             \
         OSSpinLockUnlock(&_BatchPool.spinLock);                                                \
