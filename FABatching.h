@@ -137,7 +137,7 @@ static inline Klass *FABatchAlloc##Klass(Class self)                            
 
 #define FA_BATCH_DEALLOC                                                                       \
     /* Recycle the entire batch if all the objects in it are unreferenced */                   \
-    if(__sync_add_and_fetch(&_batch->freed, 1) == FAObjectsPerBatch) {                         \
+    if(__builtin_expect(__sync_add_and_fetch(&_batch->freed, 1) == FAObjectsPerBatch, 0)) {    \
         OSSpinLockLock(&_BatchPool.spinLock);                                                  \
         FARecycleObjectBatch(&_BatchPool, _batch);                                             \
         OSSpinLockUnlock(&_BatchPool.spinLock);                                                \
