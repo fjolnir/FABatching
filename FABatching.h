@@ -1,7 +1,29 @@
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+#ifdef __APPLE__
 #import <libkern/OSAtomic.h>
+#else
+@class NSZone;
+
+typedef int32_t OSSpinLock;
+#define OS_SPINLOCK_INIT (0)
+
+static inline void OSSpinLockLock(volatile OSSpinLock *__lock )
+{
+    while(__sync_lock_test_and_set(__lock, 1));
+}
+
+static inline bool OSSpinLockTry(volatile OSSpinLock *__lock )
+{
+    return *__lock != 1;
+}
+
+static inline void OSSpinLockUnlock(volatile OSSpinLock *__lock )
+{
+    __sync_lock_release(__lock);
+}
+#endif
 
 // the size needed for the batch, with proper alignment for objects
 #define FABatchAlignment   8
@@ -40,7 +62,7 @@ static inline FABatch *FANewObjectBatch(FABatchPool *pool, long batchInstanceSiz
         len = size * FAObjectsPerBatch + FABatchSize;
         if(!(batch = (FABatch *)calloc(1, len))){
             NSLog(@"Failed to allocate object. Out of memory?");
-            return nil;
+            return NULL;
         }
         batch->instanceSize = batchInstanceSize;
     } else {
