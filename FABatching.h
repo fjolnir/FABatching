@@ -4,7 +4,7 @@
 #ifdef __APPLE__
 #import <libkern/OSAtomic.h>
 #else
-@class NSZone;
+typedef struct _NSZone NSZone;
 
 typedef int32_t OSSpinLock;
 #define OS_SPINLOCK_INIT (0)
